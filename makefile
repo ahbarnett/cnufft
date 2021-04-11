@@ -69,7 +69,16 @@ FFLAGS := $(FFLAGS) $(INCL) -I/usr/include -fPIC
 
 # single-thread total list of math and FFTW libs (now both precisions)...
 # (Note: finufft tests use LIBSFFT; spread & util tests only need LIBS)
-LIBSFFT := -l$(FFTWNAME) -l$(FFTWNAME)f $(LIBS)
+LIBSFFT := -l$(FFTWNAME) $(LIBS)
+# Detect single-precision library (not available on all systems)
+ALLOW_SINGLE := 0
+ifneq ("$(wildcard $(FFTW_DIR)/*$(FFTWNAME)f*)","")
+    $(info detected $(FFTWNAME)f library -- building with lib$(FFTWNAME)f support)
+    LIBSFFT += -l$(FFTWNAME)f
+    ALLOW_SINGLE := 1
+endif
+
+
 
 # multi-threaded libs & flags, and req'd flags (OO for new interface)...
 ifneq ($(OMP),OFF)
@@ -81,8 +90,15 @@ OFLAGS += $(OOMPFLAGS) -DR2008OO
 LIBS += $(OMPLIBS)
 ifneq ($(MINGW),ON)
 ifneq ($(MSYS),ON)
-# omp override for total list of math and FFTW libs (now both precisions)...
-LIBSFFT := -l$(FFTWNAME) -l$(FFTWNAME)_$(FFTWOMPSUFFIX) -l$(FFTWNAME)f -l$(FFTWNAME)f_$(FFTWOMPSUFFIX) $(LIBS)
+# omp override for total list of math and FFTW libs (possibly both precisions)...
+LIBSFFT := -l$(FFTWNAME) -l$(FFTWNAME)_$(FFTWOMPSUFFIX)  $(LIBS)
+# Detect single-precision library (not available on all systems)
+ALLOW_SINGLE := 0
+ifneq ("$(wildcard $(FFTW_DIR)/*$(FFTWNAME)f*)","")
+    $(info detected $(FFTWNAME)f library -- building with lib$(FFTWNAME)f support)
+    LIBSFFT += -l$(FFTWNAME)f -l$(FFTWNAME)f_$(FFTWOMPSUFFIX)
+    ALLOW_SINGLE := 1
+endif
 endif
 endif
 endif
@@ -98,7 +114,9 @@ ABSDYNLIB = $(FINUFFT)$(DYNLIB)
 # double-prec spreader object files that also need single precision...
 SOBJS = src/spreadinterp.o src/utils.o
 # their single-prec versions
-SOBJSF = $(SOBJS:%.o=%_32.o)
+ifeq ($(ALLOW_SINGLE),1)
+    SOBJSF = $(SOBJS:%.o=%_32.o)
+endif
 # precision-dependent spreader object files (compiled & linked only once)...
 SOBJS_PI = src/utils_precindep.o
 # spreader dual-precision objs
@@ -107,7 +125,9 @@ SOBJSD = $(SOBJS) $(SOBJSF) $(SOBJS_PI)
 # double-prec library object files that also need single precision...
 OBJS = $(SOBJS) src/finufft.o src/simpleinterfaces.o fortran/finufftfort.o
 # their single-prec versions
-OBJSF = $(OBJS:%.o=%_32.o)
+ifeq ($(ALLOW_SINGLE),1)
+    OBJSF = $(OBJS:%.o=%_32.o)
+endif
 # precision-dependent library object files (compiled & linked only once)...
 OBJS_PI = $(SOBJS_PI) contrib/legendre_rule_fast.o julia/finufftjulia.o
 # all lib dual-precision objs
@@ -148,16 +168,22 @@ HEADERS = $(wildcard include/*.h)
 # implicit rules for objects (note -o ensures writes to correct dir)
 %.o: %.cpp $(HEADERS)
 	$(CXX) -c $(CXXFLAGS) $< -o $@
+ifeq ($(ALLOW_SINGLE),1)
 %_32.o: %.cpp $(HEADERS)
 	$(CXX) -DSINGLE -c $(CXXFLAGS) $< -o $@
+endif
 %.o: %.c $(HEADERS)
 	$(CC) -c $(CFLAGS) $< -o $@
+ifeq ($(ALLOW_SINGLE),1)
 %_32.o: %.c $(HEADERS)
 	$(CC) -DSINGLE -c $(CFLAGS) $< -o $@
+endif
 %.o: %.f
 	$(FC) -c $(FFLAGS) $< -o $@
+ifeq ($(ALLOW_SINGLE),1)
 %_32.o: %.f
 	$(FC) -DSINGLE -c $(FFLAGS) $< -o $@
+endif
 
 # included auto-generated code dependency...
 src/spreadinterp.o: src/ker_horner_allw_loop.c src/ker_lowupsampfac_horner_allw_loop.c
@@ -227,8 +253,10 @@ test/%f: test/%.cpp $(DYNLIB)
 # low-level tests that are cleaner if depend on only specific objects...
 test/testutils: test/testutils.cpp src/utils.o src/utils_precindep.o
 	$(CXX) $(CXXFLAGS) test/testutils.cpp src/utils.o src/utils_precindep.o $(LIBS) -o test/testutils
+ifeq ($(ALLOW_SINGLE),1)
 test/testutilsf: test/testutils.cpp src/utils_32.o src/utils_precindep.o
 	$(CXX) $(CXXFLAGS) -DSINGLE test/testutils.cpp src/utils_32.o src/utils_precindep.o $(LIBS) -o test/testutilsf
+endif
 
 # make sure all double-prec test executables ready for testing
 TESTS := $(basename $(wildcard test/*.cpp))
@@ -265,16 +293,20 @@ endif
 # generic perf test rules...
 perftest/%: perftest/%.cpp $(DYNLIB)
 	$(CXX) $(CXXFLAGS) $< $(ABSDYNLIB) $(LIBSFFT) -o $@
+ifeq ($(ALLOW_SINGLE),1)
 perftest/%f: perftest/%.cpp $(DYNLIB)
 	$(CXX) $(CXXFLAGS) -DSINGLE $< $(ABSDYNLIB) $(LIBSFFT) -o $@
+endif
 
 # spreader only test, double/single (good for self-contained work on spreader)
 ST=perftest/spreadtestnd
 STF=$(ST)f
 $(ST): $(ST).cpp $(SOBJS) $(SOBJS_PI)
 	$(CXX) $(CXXFLAGS) $< $(SOBJS) $(SOBJS_PI) $(LIBS) -o $@
+ifeq ($(ALLOW_SINGLE),1)
 $(STF): $(ST).cpp $(SOBJSF) $(SOBJS_PI)
 	$(CXX) $(CXXFLAGS) -DSINGLE $< $(SOBJSF) $(SOBJS_PI) $(LIBS) -o $@
+endif
 spreadtest: $(ST) $(STF)
 # run one thread per core... (escape the $ to get single $ in bash; one big cmd)
 	(export OMP_NUM_THREADS=$$(perftest/mynumcores.sh) ;\
